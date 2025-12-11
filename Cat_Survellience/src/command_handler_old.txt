@@ -1,0 +1,90 @@
+#ifndef COMMAND_HANDALER_H
+#define COMMAND_HANDALER_H
+
+#include <Arduino.h>
+#include "esp_http_server.h"
+
+// ---- Arduino Battery Polling ----
+// Marked static to avoid multiple-definition errors if header is included twice
+static int battery_level = -1;                
+static unsigned long lastBatteryRequest = 0;  
+static String serialBuffer = "";              
+#define time_interval_B_S 60000
+
+// ESP32 → Arduino serial bridge
+#define ARDUINO_SERIAL Serial2   // Use UART2
+
+// Must be static or inline
+static void CMD_Serial_Init() {
+    ARDUINO_SERIAL.begin(57600, SERIAL_8N1, 14, 15);  
+    // GPIO14 = RX, GPIO15 = TX
+}
+
+// Must be static or inline
+static void battery_status_loop() 
+{
+    if (millis() - lastBatteryRequest >= time_interval_B_S) 
+    {
+        ARDUINO_SERIAL.print("CMD:BAT?\n");
+        lastBatteryRequest = millis();
+    }
+
+    while (ARDUINO_SERIAL.available()) 
+    {
+        char c = ARDUINO_SERIAL.read();
+
+        if (c == '\n') 
+        {
+            if (serialBuffer.startsWith("BAT:")) 
+            {
+                battery_level = serialBuffer.substring(4).toInt();
+            }
+            serialBuffer = "";
+        }
+        else 
+        {
+            serialBuffer += c;
+        }
+    }
+
+    delay(1);  // FreeRTOS yield
+}
+
+// ---------------- CAR CONTROL HTTP HANDLER ----------------
+static esp_err_t car_control_handler(httpd_req_t *req)
+{
+    char param[128];
+    char direction[20] = {0};
+    char speedStr[10] = {0};
+
+    // Extract the query string first
+    if (httpd_req_get_url_query_str(req, param, sizeof(param)) == ESP_OK)
+    {
+        httpd_query_key_value(param, "dir", direction, sizeof(direction));
+        httpd_query_key_value(param, "speed", speedStr, sizeof(speedStr));
+    }
+
+    int speed = atoi(speedStr);
+
+    // Send command to Arduino
+    String cmd = "CMD:MOVE," + String(direction) + "," + String(speed) + "\n";
+    ARDUINO_SERIAL.print(cmd);
+
+    httpd_resp_set_type(req, "text/plain");
+    httpd_resp_sendstr(req, "OK");
+    return ESP_OK;
+}
+
+
+// ---------------- BATTERY HTTP HANDLER ----------------
+static esp_err_t battery_handler(httpd_req_t *req)
+{
+    char json[64];
+    sprintf(json, "{\"level\":%d}", battery_level);
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, json);
+    return ESP_OK;
+}
+
+#endif

@@ -1,0 +1,2 @@
+gzip -c updated.html > updated.html.gz
+python3 html2c.py updated.html.gz > updated.c
